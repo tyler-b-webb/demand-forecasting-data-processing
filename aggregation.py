@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Thu May 18 11:08:34 2023
+Created on Mon Jul 26 13:58:06 2021
 
-@author: epnzv
+@author: gmtxy
 """
 
 import pandas as pd 
@@ -13,10 +13,10 @@ from calendar import monthrange
 import datetime as dt
 from pandasql import sqldf
 
-from aggregation_config import(ABM_FIPS_MAP, ABM_TABLE, BIG_CF_FILE, BLIZZARD_DIR, CF_2022_FILE,
-                               CF_2023_FILE, CF_2023_FILE_Y1, CM_DIR, DAILY_FRACTIONS, DATA_DIR, H2H_DIR, HISTORICAL_SRP, 
-                               IMPUTE_H2H, MONTHLY_FRACTIONS, OLD_2020, ORDER_DATE, ORDER_FRACTION_2021,
-                               SALES_2021, SALES_2022, SALES_2021_W_DATE, SALES_DIR, SCM_DATA_DIR, SCM_DATA_FILE, 
+from aggregation_config import(ABM_FIPS_MAP, ABM_TABLE, BIG_CF_FILE, BLIZZARD_DIR, CM_DIR,
+                               DATA_DIR, H2H_DIR, HISTORICAL_SRP, MONTHLY_FRACTIONS,
+                               OLD_2020, ORDER_DATE, ORDER_FRACTION_2021, SALES_2021, SALES_2022,
+                               SALES_2021_W_DATE, SALES_DIR, SCM_DATA_DIR, SCM_DATA_FILE, 
                                YIELD_COUNTY_DATA, YEARLY_ABM_FIPS_MAP)
 
 
@@ -74,7 +74,7 @@ def read_sales_filepath():
     dfs_path = []
     
     # read in the data by year 
-    for year in range(2018, 2021):
+    for year in range(2008, 2021):
         print("Read ", str(year), " Sales Data")
         dfi_path = DATA_DIR + SALES_DIR + str(year) + '.csv'
         dfi = pd.read_csv(dfi_path)
@@ -86,14 +86,6 @@ def read_sales_filepath():
         
         # convert the effective date to a datetime format in order to set the mask 
         dfi['EFFECTIVE_DATE'] = pd.to_datetime(dfi['EFFECTIVE_DATE'])
-        
-        # set 2020 abms to old format
-        if year == 2020:
-            dfi = dfi.rename(columns = {'SLS_LVL_2_ID':"TEAM_KEY"})
-            dfi = dfi.merge(abm_Teamkey, how = 'left', on = ['TEAM_KEY'])
-            dfi = dfi.rename(columns = {'abm':'SLS_LVL_2_ID'})
-            dfi = dfi.drop(columns=['TEAM_KEY'])
-
         
         # add modified dataframe to the list 
         dfs_path.append(dfi)
@@ -248,197 +240,6 @@ def merge_2021_sales_data_w_date(df):
     return df_merged
 
 
-def merge_2021_sales_data_impute_daily(df):
-    """Merges the 2021 sales data.
-    
-    Keyword arguments:
-        df -- the dataframe to concat onto
-    Returns:
-        df_merged
-    """
-    # read in the 2021 sales data
-    sales_2021 = pd.read_csv(DATA_DIR + SALES_2021)
-    
-    # grab relevant columns
-    sales_2021_subset = sales_2021[['Team', 'VARIETY', 'CY Net Sales',
-                                    'Returns', 'Haulbacks', 'Replants', 'Shipped']]
-    
-    # rename the columns
-    sales_2021_subset = sales_2021_subset.rename(columns={'Team': 'TEAM_KEY',
-                                                          'VARIETY': 'Variety_Name',
-                                                          'CY Net Sales': 'nets_Q',
-                                                          'Returns': 'return_Q_ret',
-                                                          'Haulbacks': 'return_Q_haul',
-                                                          'Replants': 'replant_Q',
-                                                          'Shipped': 'order_Q'
-                                                          })
-    
-    # remove any variety names with "Empty"
-    sales_2021_subset = sales_2021_subset[
-            sales_2021_subset['Variety_Name'] != '(Empty)'].reset_index(drop=True)
-        
-    sales_2021_subset = sales_2021_subset.merge(abm_Teamkey, on=['TEAM_KEY'],
-                                                how='left')
-    
-    sales_2021_subset = sales_2021_subset.drop(columns=['TEAM_KEY'])
-    
-    # change order data to float
-    sales_2021_subset['order_Q'] = sales_2021_subset['order_Q'].str.replace(',','')
-    sales_2021_subset['order_Q'] = sales_2021_subset['order_Q'].astype('float64')
-    
-    # do the same for the returns/haulbacks and set return_Q to be the sum of the quantities
-    sales_2021_subset['return_Q_ret'] = sales_2021_subset['return_Q_ret'].str.replace(',','')
-    sales_2021_subset['return_Q_ret'] = sales_2021_subset['return_Q_ret'].astype('float64')
-    sales_2021_subset['return_Q_haul'] = sales_2021_subset['return_Q_haul'].str.replace(',','')
-    sales_2021_subset['return_Q_haul'] = sales_2021_subset['return_Q_haul'].astype('float64')
-    
-    # do the same for nets Q and replants
-    sales_2021_subset['nets_Q'] = sales_2021_subset['nets_Q'].str.replace(',', '')
-    sales_2021_subset['nets_Q'] = sales_2021_subset['nets_Q'].astype('float64')
-    sales_2021_subset['replant_Q'] = sales_2021_subset['replant_Q'].str.replace(',', '')
-    sales_2021_subset['replant_Q'] = sales_2021_subset['replant_Q'].astype('float64')
-
-    
-    sales_2021_subset['return_Q'] = (
-            sales_2021_subset['return_Q_haul'] + sales_2021_subset['return_Q_ret'])
-    
-    sales_2021_subset = sales_2021_subset.drop(columns=['return_Q_haul',
-                                                        'return_Q_ret'])
-
-    # group by product and abm
-    sales_2021_agg = sales_2021_subset.groupby(
-            by=['Variety_Name', 'abm'], as_index=False).sum()
-    
-    # read in the monthly historical fractions
-    daily_fractions = pd.read_csv(DAILY_FRACTIONS)
-    
-    # grab the day from the daily fractions
-    daily_fractions_order_date = daily_fractions[
-            (daily_fractions['month'] == ORDER_DATE['month']) &
-            (daily_fractions['day'] == ORDER_DATE['day'])].reset_index(drop=True)
-    
-    daily_fractions_order_date = daily_fractions_order_date.drop(columns=['month', 'day'])
-    
-    # merge the monthly fractions
-    sales_2021_to_date = sales_2021_agg.merge(daily_fractions_order_date,
-                                              on=['abm'],
-                                              how='left')
-    
-    # drop NAs
-    sales_2021_to_date = sales_2021_to_date.dropna().reset_index(drop=True)
-            
-    sales_2021_to_date['orders_to_date'] = sales_2021_to_date['order_Q'] * sales_2021_to_date['order_fraction']
-    sales_2021_to_date['year'] = 2021
-    sales_2021_to_date['year'] = sales_2021_to_date['year'].astype(str)
-
-    #sales_2021_to_date = sales_2021_to_date.drop(columns=['order_Q'])
-    """        
-    df_w_lag = create_late_lagged_sales(df=sales_2021_to_date,
-                                        full_df=df,
-                                        year=2021)
-    """
-    df_w_lag = sales_2021_to_date.copy()
-    # concatenate with the main dataframe
-    df_merged = pd.concat([df, df_w_lag])
-    
-    return df_merged
-
-
-def merge_2022_sales_data_impute_daily(df):
-    """Merges the 2022 sales data.
-    
-    Keyword arguments:
-        df -- the dataframe to concat onto
-    Returns:
-        df_merged
-    """
-    # read in the 2021 sales data
-    sales_2022 = pd.read_csv(DATA_DIR + SALES_2022)
-    
-    # grab relevant columns
-    sales_2022_subset = sales_2022[['Team', 'VARIETY', 'CY Net Sales',
-                                    'Returns', 'Haulbacks', 'Replants', 'Shipped']]
-    
-    # rename the columns
-    sales_2022_subset = sales_2022_subset.rename(columns={'Team': 'TEAM_KEY',
-                                                          'VARIETY': 'Variety_Name',
-                                                          'CY Net Sales': 'nets_Q',
-                                                          'Returns': 'return_Q_ret',
-                                                          'Haulbacks': 'return_Q_haul',
-                                                          'Replants': 'replant_Q',
-                                                          'Shipped': 'order_Q'})
-    
-    # remove any variety names with "Empty"
-    sales_2022_subset = sales_2022_subset[
-            sales_2022_subset['Variety_Name'] != '(Empty)'].reset_index(drop=True)
-        
-    sales_2022_subset = sales_2022_subset.merge(abm_Teamkey, on=['TEAM_KEY'],
-                                                how='left')
-    
-    sales_2022_subset = sales_2022_subset.drop(columns=['TEAM_KEY'])
-    
-    # change order data to float
-    sales_2022_subset['order_Q'] = sales_2022_subset['order_Q'].str.replace(',','')
-    sales_2022_subset['order_Q'] = sales_2022_subset['order_Q'].astype('float64')
-    
-    # do the same for the returns/haulbacks and set return_Q to be the sum of the quantities
-    sales_2022_subset['return_Q_ret'] = sales_2022_subset['return_Q_ret'].str.replace(',','')
-    sales_2022_subset['return_Q_ret'] = sales_2022_subset['return_Q_ret'].astype('float64')
-    sales_2022_subset['return_Q_haul'] = sales_2022_subset['return_Q_haul'].str.replace(',','')
-    sales_2022_subset['return_Q_haul'] = sales_2022_subset['return_Q_haul'].astype('float64')
-    
-    # do the same for nets Q and replants
-    sales_2022_subset['nets_Q'] = sales_2022_subset['nets_Q'].str.replace(',', '')
-    sales_2022_subset['nets_Q'] = sales_2022_subset['nets_Q'].astype('float64')
-    sales_2022_subset['replant_Q'] = sales_2022_subset['replant_Q'].str.replace(',', '')
-    sales_2022_subset['replant_Q'] = sales_2022_subset['replant_Q'].astype('float64')
-
-    sales_2022_subset['return_Q'] = (
-            sales_2022_subset['return_Q_haul'] + sales_2022_subset['return_Q_ret'])
-    
-    sales_2022_subset = sales_2022_subset.drop(columns=['return_Q_haul',
-                                                        'return_Q_ret'])
-
-    # group by product and abm
-    sales_2022_agg = sales_2022_subset.groupby(
-            by=['Variety_Name', 'abm'], as_index=False).sum()
-    
-    # read in the monthly historical fractions
-    daily_fractions = pd.read_csv(DAILY_FRACTIONS)
-    
-    # grab the day from the daily fractions
-    daily_fractions_order_date = daily_fractions[
-            (daily_fractions['month'] == ORDER_DATE['month']) &
-            (daily_fractions['day'] == ORDER_DATE['day'])].reset_index(drop=True)
-    
-    daily_fractions_order_date = daily_fractions_order_date.drop(columns=['month', 'day'])
-    
-    # merge the monthly fractions
-    sales_2022_to_date = sales_2022_agg.merge(daily_fractions_order_date,
-                                              on=['abm'],
-                                              how='left')
-    
-    # drop NAs
-    sales_2022_to_date = sales_2022_to_date.dropna().reset_index(drop=True)
-            
-    sales_2022_to_date['orders_to_date'] = sales_2022_to_date['order_Q'] * sales_2022_to_date['order_fraction']
-    sales_2022_to_date['year'] = 2022
-    sales_2022_to_date['year'] = sales_2022_to_date['year'].astype(str)
-
-    #sales_2022_to_date = sales_2022_to_date.drop(columns=['order_Q'])
-    """        
-    df_w_lag = create_late_lagged_sales(df=sales_2022_to_date,
-                                        full_df=df,
-                                        year=2022)
-    """
-    df_w_lag = sales_2022_to_date.copy()
-    
-    # concatenate with the main dataframe
-    df_merged = pd.concat([df, df_w_lag])
-    
-    return df_merged
-
-
 def merge_2021_sales_data_impute_monthly(df):
     """Merges the 2021 sales data.
     
@@ -501,7 +302,6 @@ def merge_2021_sales_data_impute_monthly(df):
     
     # read in the monthly historical fractions
     monthly_fractions = pd.read_csv(MONTHLY_FRACTIONS)
-    daily_fractions = pd.read_csv(DAILY_FRACTIONS)
     
     # merge the monthly fractions
     sales_2021_monthly = sales_2021_agg.merge(monthly_fractions,
@@ -540,112 +340,6 @@ def merge_2021_sales_data_impute_monthly(df):
                                         full_df=df,
                                         year=2021)
     
-    
-    # concatenate with the main dataframe
-    df_merged = pd.concat([df, df_w_lag])
-    
-    return df_merged
-
-
-def merge_2022_sales_data_impute_monthly(df):
-    """Merges the 2021 sales data.
-    
-    Keyword arguments:
-        df -- the dataframe to concat onto
-    Returns:
-        df_merged
-    """
-    # read in the 2021 sales data
-    sales_2022 = pd.read_csv(DATA_DIR + SALES_2022)
-    
-    # grab relevant columns
-    sales_2022_subset = sales_2022[['Team', 'VARIETY', 'CY Net Sales',
-                                    'Returns', 'Haulbacks', 'Replants', 'Orders']]
-    
-    # rename the columns
-    sales_2022_subset = sales_2022_subset.rename(columns={'Team': 'TEAM_KEY',
-                                                          'VARIETY': 'Variety_Name',
-                                                          'CY Net Sales': 'nets_Q',
-                                                          'Returns': 'return_Q_ret',
-                                                          'Haulbacks': 'return_Q_haul',
-                                                          'Replants': 'replant_Q',
-                                                          'Orders': 'order_Q'})
-    
-    # remove any variety names with "Empty"
-    sales_2022_subset = sales_2022_subset[
-            sales_2022_subset['Variety_Name'] != '(Empty)'].reset_index(drop=True)
-        
-    sales_2022_subset = sales_2022_subset.merge(abm_Teamkey, on=['TEAM_KEY'],
-                                                how='left')
-    
-    sales_2022_subset = sales_2022_subset.drop(columns=['TEAM_KEY'])
-    
-    # change order data to float
-    sales_2022_subset['order_Q'] = sales_2022_subset['order_Q'].str.replace(',','')
-    sales_2022_subset['order_Q'] = sales_2022_subset['order_Q'].astype('float64')
-    
-    # do the same for the returns/haulbacks and set return_Q to be the sum of the quantities
-    sales_2022_subset['return_Q_ret'] = sales_2022_subset['return_Q_ret'].str.replace(',','')
-    sales_2022_subset['return_Q_ret'] = sales_2022_subset['return_Q_ret'].astype('float64')
-    sales_2022_subset['return_Q_haul'] = sales_2022_subset['return_Q_haul'].str.replace(',','')
-    sales_2022_subset['return_Q_haul'] = sales_2022_subset['return_Q_haul'].astype('float64')
-    
-    # do the same for nets Q and replants
-    sales_2022_subset['nets_Q'] = sales_2022_subset['nets_Q'].str.replace(',', '')
-    sales_2022_subset['nets_Q'] = sales_2022_subset['nets_Q'].astype('float64')
-    sales_2022_subset['replant_Q'] = sales_2022_subset['replant_Q'].str.replace(',', '')
-    sales_2022_subset['replant_Q'] = sales_2022_subset['replant_Q'].astype('float64')
-
-    
-    sales_2022_subset['return_Q'] = (
-            sales_2022_subset['return_Q_haul'] + sales_2022_subset['return_Q_ret'])
-    
-    sales_2022_subset = sales_2022_subset.drop(columns=['return_Q_haul',
-                                                        'return_Q_ret'])
-
-    # group by product and abm
-    sales_2022_agg = sales_2022_subset.groupby(
-            by=['Variety_Name', 'abm'], as_index=False).sum()
-    
-    # read in the monthly historical fractions
-    monthly_fractions = pd.read_csv(MONTHLY_FRACTIONS)
-    
-    # merge the monthly fractions
-    sales_2022_monthly = sales_2022_agg.merge(monthly_fractions,
-                                              on=['abm'],
-                                              how='left')
-    
-    # drop NAs
-    sales_2022_monthly = sales_2022_monthly.dropna().reset_index(drop=True)
-        
-    # create the monthly order features
-    months = [9, 10, 11, 12, 1, 2, 3, 4, 5, 6, 7]
-    for i in months:
-        sales_2022_monthly['order_Q_month_' + str(i)] = (
-                sales_2022_monthly['order_Q'] * sales_2022_monthly['frac_' + str(i)])
-        sales_2022_monthly = sales_2022_monthly.drop(columns=['frac_' + str(i)])
-    
-    sales_2022_monthly['order_Q_month_8'] = sales_2022_monthly['order_Q'].values
-    sales_2022_monthly['year'] = 2022
-    sales_2022_monthly['year'] = sales_2022_monthly['year'].astype(str)
-
-    sales_2022_monthly = sales_2022_monthly.drop(columns=['order_Q'])
-    
-    # create the orders_to_date feature
-    if ORDER_DATE['month'] != 1:
-        this_month = sales_2022_monthly['order_Q_month_' + str(ORDER_DATE['month'] - 1)].values
-    else:
-        this_month = sales_2022_monthly['order_Q_month_12'].values
-        
-    next_month = sales_2022_monthly['order_Q_month_' + str(ORDER_DATE['month'])].values
-    
-    this_month_change = next_month - this_month
-    
-    sales_2022_monthly['orders_to_date'] = this_month + ORDER_FRACTION_2021 * this_month_change
-        
-    df_w_lag = create_late_lagged_sales(df=sales_2022_monthly,
-                                        full_df=df,
-                                        year=2022)
     
     # concatenate with the main dataframe
     df_merged = pd.concat([df, df_w_lag])
@@ -729,20 +423,20 @@ def create_late_lagged_sales(df, full_df, year):
     """
        # get the lagged sales data
     df_last_year = full_df[full_df['year'] == str(year - 1)].copy().reset_index(drop=True)
-    df_last_year = df_last_year[['abm', 'Variety_Name', 'nets_Q', 'order_Q',
+    df_last_year = df_last_year[['abm', 'Variety_Name', 'nets_Q', 'order_Q_month_8',
                                  'return_Q', 'replant_Q']]
     df_last_year['year'] = str(year)
     df_last_year = df_last_year.rename(columns={'nets_Q': 'nets_Q_1',
-                                                'order_Q': 'order_Q_1',
+                                                'order_Q_month_8': 'order_Q_1',
                                                 'return_Q': 'return_Q_1',
                                                 'replant_Q': 'replant_Q_1'})
         
     df_two_year = full_df[full_df['year'] == str(year - 2)].copy().reset_index(drop=True)
-    df_two_year = df_two_year[['abm', 'Variety_Name', 'nets_Q', 'order_Q',
+    df_two_year = df_two_year[['abm', 'Variety_Name', 'nets_Q', 'order_Q_month_8',
                                'return_Q', 'replant_Q']]
     df_two_year['year'] = str(year)
     df_two_year = df_two_year.rename(columns={'nets_Q': 'nets_Q_2',
-                                              'order_Q': 'order_Q_2',
+                                              'order_Q_month_8': 'order_Q_2',
                                               'return_Q': 'return_Q_2',
                                               'replant_Q': 'replant_Q_2'})
 
@@ -837,8 +531,6 @@ def merge_2022_sales_data(df):
                                         full_df=df,
                                         year=2022)
         
-    df_w_lag = sales_monthly_total.copy()
-    
     df_merged = pd.concat([df, df_w_lag])
     
     return df_merged
@@ -886,161 +578,6 @@ def merge_2022_SCM_data(df):
     return df_merged
 
 
-def merge_2023_D1MS(df):
-    """
-    """
-    
-    # read in the file
-    sales_23 = pd.read_csv(DATA_DIR + 'D1_MS_23_product_location_112822.csv')
-    
-    # fill nas with 0
-    sales_23 = sales_23.fillna(0)
-    
-    sales_23 = sales_23.rename(columns={'MK_YR': 'year', 'VARIETY_NAME': 'Variety_Name',
-                                'SLS_LVL_2_ID': 'TEAM_KEY', 
-                                'SUM(NET_SALES_QTY_TO_DATE)': 'nets_Q',
-                                'SUM(ORDER_QTY_TO_DATE)': 'order_Q',
-                                'SUM(RETURN_QTY_TO_DATE)': 'return_Q',
-                                'SUM(REPLANT_QTY_TO_DATE)': 'replant_Q'})
-    
-    # select national brand corn
-    sales_23 = sales_23[sales_23['BRAND_FAMILY_DESCR'] == 'NATIONAL'].reset_index(drop=True)
-    sales_23 = sales_23[sales_23['SPECIE_DESCR'] == 'SOYBEAN'].reset_index(drop=True)
-    
-    sales_23_subset = sales_23[
-            ['year', 'Variety_Name', 'TEAM_KEY', 'EFFECTIVE_DATE', 'nets_Q',
-             'order_Q', 'return_Q', 'replant_Q']]
-    
-    # drop all nas
-    sales_23_subset = sales_23_subset.dropna().reset_index(drop=True)
-    
-    # re-adjust to old abm names
-    sales_23_subset = sales_23_subset.merge(abm_Teamkey, on=['TEAM_KEY'], how='left')
-    sales_23_subset = sales_23_subset.drop(columns=['TEAM_KEY'])
-    
-    # remove the 'RIB' string from the hybrid name
-    sales_23_subset['Variety_Name'] = sales_23_subset['Variety_Name'].str.replace('RIB', '')
-
-    # change the effective date string to make the datetime readable
-    sales_23_dates = sales_23_subset['EFFECTIVE_DATE'].astype(str).to_frame()
-    
-    sales_23_dates['year'] = sales_23_dates['EFFECTIVE_DATE'].str[:4]
-    sales_23_dates['month'] = sales_23_dates['EFFECTIVE_DATE'].str[4:6]
-    sales_23_dates['day'] = sales_23_dates['EFFECTIVE_DATE'].str[6:8]
-    
-    sales_23_dates = sales_23_dates.drop(columns=['EFFECTIVE_DATE'])
-    
-    # create a datetime object out of the effective date
-    sales_23_subset['EFFECTIVE_DATE'] = pd.to_datetime(sales_23_dates)
-    
-    # remove M string from the year
-    sales_23_subset['year'] = sales_23_subset['year'].str.replace('M', '')
-    
-    sales_23_no_date = sales_23_subset.drop(columns=['EFFECTIVE_DATE']).groupby(
-            by=['year', 'Variety_Name', 'abm'], as_index=False).sum()
-    
-    # set the orders to date quantity
-    sales_23_no_date['orders_to_date'] = sales_23_no_date['order_Q'].values
-    """
-    # get lagged sales
-    sales_21 = df[df['year'] == '2021'].copy()
-    sales_22 = df[df['year'] == '2022'].copy()
-    
-    sales_21 = sales_21[['year', 'abm', 'Variety_Name', 'nets_Q', 'order_Q',
-                         'return_Q', 'replant_Q']]
-    sales_22 = sales_22[['year', 'abm', 'Variety_Name', 'nets_Q', 'order_Q',
-                         'return_Q', 'replant_Q']]
-
-    #rename the columns
-    sales_21 = sales_21.rename(columns={'nets_Q': 'nets_Q_2',
-                                        'order_Q': 'order_Q_2',
-                                        'return_Q': 'return_Q_2',
-                                        'replant_Q': 'replant_Q_2'})
-    
-    sales_22 = sales_22.rename(columns={'nets_Q': 'nets_Q_1',
-                                        'order_Q': 'order_Q_1',
-                                        'return_Q': 'return_Q_1',
-                                        'replant_Q': 'replant_Q_1'})
-    
-    sales_21['year'] = '2023'
-    sales_22['year'] = '2023'
-    
-    sales_23_no_date = sales_23_no_date.merge(sales_21,
-                                              on=['year', 'Variety_Name', 'abm'],
-                                              how='left')
-    sales_23_no_date = sales_23_no_date.merge(sales_22,
-                                              on=['year', 'Variety_Name', 'abm'],
-                                              how='left')
-    """
-    df_w_23 = pd.concat([df, sales_23_no_date])
-    
-    return df_w_23
-
-
-def merge_2023_tim_pulled_data(df):
-    """
-    """
-    sales_23 = pd.read_csv(DATA_DIR + 'sales_data_from_tim/asgrow_nov7_orders_amended.csv')
-    
-    sales_23 = sales_23.rename(columns={'Sales Office': 'TEAM_KEY',
-                                        'Acronym Name': 'Variety_Name',
-                                        ' Total ': 'order_Q'})
-        
-    sales_23 = sales_23.merge(abm_Teamkey, on=['TEAM_KEY'], how='left')
-    sales_23 = sales_23.drop(columns=['TEAM_KEY'])
-        
-    sales_23 = sales_23.dropna().reset_index(drop=True)
-    
-    # remove commas and change orders to date to an integer
-    sales_23['order_Q'] = sales_23['order_Q'].str.replace(',','').astype(int)
-    
-    # set the order to date quantity
-    sales_23['orders_to_date'] = sales_23['order_Q'].values
-    
-    # set other quantities to zero
-    sales_23['nets_Q'] = 0
-    sales_23['return_Q'] = 0
-    sales_23['replant_Q'] = 0
-    
-    # set the year
-    sales_23['year'] = '2023'
-    
-    # get lagged sales
-    sales_21 = df[df['year'] == '2021'].copy()
-    sales_22 = df[df['year'] == '2022'].copy()
-    
-    sales_21 = sales_21[['year', 'abm', 'Variety_Name', 'nets_Q', 'order_Q',
-                         'return_Q', 'replant_Q']]
-    sales_22 = sales_22[['year', 'abm', 'Variety_Name', 'nets_Q', 'order_Q',
-                         'return_Q', 'replant_Q']]
-
-    #rename the columns
-    sales_21 = sales_21.rename(columns={'nets_Q': 'nets_Q_2',
-                                        'order_Q': 'order_Q_2',
-                                        'return_Q': 'return_Q_2',
-                                        'replant_Q': 'replant_Q_2'})
-    
-    sales_22 = sales_22.rename(columns={'nets_Q': 'nets_Q_1',
-                                        'order_Q': 'order_Q_1',
-                                        'return_Q': 'return_Q_1',
-                                        'replant_Q': 'replant_Q_1'})
-    
-    sales_21['year'] = '2023'
-    sales_22['year'] = '2023'
-    
-    sales_23 = sales_23.merge(sales_21,
-                              on=['year', 'Variety_Name', 'abm'],
-                              how='left')
-    sales_23 = sales_23.merge(sales_22,
-                              on=['year', 'Variety_Name', 'abm'],
-                              how='left')
-
-    df_w_23 = pd.concat([df, sales_23])
-    
-
-    return df_w_23
-
-
 def create_lagged_sales(df):
     """Creates the "lagged" sales features, namely the sales data for a product
     from the two previous years in a given ABM.
@@ -1053,47 +590,23 @@ def create_lagged_sales(df):
     """
     print('Creating lagged features...')
     
-    LAGGED_FEATURES = ['order_Q_1', 'order_Q_2', 'order_Q_3']
+    LAGGED_FEATURES = ['nets_Q_1', 'order_Q_1', 'return_Q_1', 'replant_Q_1',
+                   'nets_Q_2', 'order_Q_2', 'return_Q_2']
     
     df = df.rename(columns = {'Variety_Name':'hybrid'})
     df['year'] = df['year'].astype(int)
     sales_all = df.copy()
+
     # define the selection criteria as strings to use in the sqldf commmand
     # this is principally just for readability
-    #current_year_q = "select a.year, a.abm, a.hybrid, a.nets_Q, a.order_Q, a.return_Q, a.replant_Q, "
-    #last_year_q = "b.nets_Q as nets_Q_1, b.order_Q as order_Q_1, b.return_Q as return_Q_1, b.replant_Q as replant_Q_1, "
-    #two_years_q = "c.nets_Q as nets_Q_2, c.order_Q as order_Q_2, c.return_Q as return_Q_2 from sales_all "
-    #join_last_year = "a left join sales_all b on a.hybrid = b.hybrid and a.abm = b.abm and a.year = b.year + 1 "
-    #join_two_years = "left join sales_all c on a.hybrid = c.hybrid and a.abm = c.abm and a.year = c.year + 2"
+    current_year_q = "select a.year, a.abm, a.hybrid, a.nets_Q, a.order_Q, a.return_Q, a.replant_Q, "
+    last_year_q = "b.nets_Q as nets_Q_1, b.order_Q as order_Q_1, b.return_Q as return_Q_1, b.replant_Q as replant_Q_1, "
+    two_years_q = "c.nets_Q as nets_Q_2, c.order_Q as order_Q_2, c.return_Q as return_Q_2 from sales_all "
+    join_last_year = "a left join sales_all b on a.hybrid = b.hybrid and a.abm = b.abm and a.year = b.year + 1 "
+    join_two_years = "left join sales_all c on a.hybrid = c.hybrid and a.abm = c.abm and a.year = c.year + 2"
  
-    #sales_with_lag = sqldf(current_year_q + last_year_q + two_years_q + 
-    #                       join_last_year + join_two_years)
-    
-    sales_all_lag_1 = sales_all.copy()[['year', 'abm', 'hybrid', 'orders_to_date']]
-    sales_all_lag_2 = sales_all.copy()[['year', 'abm', 'hybrid', 'orders_to_date']]
-    sales_all_lag_3 = sales_all.copy()[['year', 'abm', 'hybrid', 'orders_to_date']]
-    
-    # adjust years
-    sales_all_lag_1['year'] = sales_all_lag_1['year'] + 1
-    sales_all_lag_2['year'] = sales_all_lag_2['year'] + 2
-    sales_all_lag_3['year'] = sales_all_lag_3['year'] + 3
-    
-    sales_all_lag_1 = sales_all_lag_1[
-            ['year', 'hybrid', 'abm', 'orders_to_date']].rename(
-            columns={'orders_to_date': 'order_Q_1'})
-    sales_all_lag_2 = sales_all_lag_2[
-            ['year', 'hybrid', 'abm', 'orders_to_date']].rename(
-            columns={'orders_to_date': 'order_Q_2'})
-    sales_all_lag_3 = sales_all_lag_3[
-            ['year', 'hybrid', 'abm', 'orders_to_date']].rename(
-            columns={'orders_to_date': 'order_Q_3'})
-    
-    sales_with_lag = sales_all.merge(sales_all_lag_1, on=['year', 'hybrid', 'abm'], how='left')
-    sales_with_lag = sales_with_lag.merge(sales_all_lag_2, on=['year', 'hybrid', 'abm'], how='left')
-    sales_with_lag = sales_with_lag.merge(sales_all_lag_3, on=['year', 'hybrid', 'abm'], how='left')
-    
-    for col in sales_with_lag.columns:
-        print(col)
+    sales_with_lag = sqldf(current_year_q + last_year_q + two_years_q + 
+                           join_last_year + join_two_years)
     
     # impute, replacing the NaNs with zeros
     for feature in LAGGED_FEATURES:
@@ -1108,9 +621,8 @@ def create_lagged_sales(df):
     # grabs data after the cutoff year
     sales_with_lag = sales_with_lag[sales_with_lag['year'] >= '2012'] 
 
-    # drop sales data for this moment 
-    #sales_with_lag = sales_with_lag.drop(columns = ['order_Q']).reset_index(drop = True)
-    
+    # drop sales data for this momennt 
+    sales_with_lag = sales_with_lag.drop(columns = ['order_Q']).reset_index(drop = True)
     return sales_with_lag
 
 
@@ -1155,7 +667,7 @@ def create_monthly_sales(Sale_2012_2020_lagged, clean_Sale):
         
         df_to_date = df_to_date.rename(columns={'order_Q': 'orders_to_date'})
         
-        """
+        
         for month in months:
             print("month", month)
             if month > 8:
@@ -1178,43 +690,24 @@ def create_monthly_sales(Sale_2012_2020_lagged, clean_Sale):
         df_monthly_total = df_monthly_total.merge(df_to_date,
                                                   on=['year', 'Variety_Name', 'abm'],
                                                   how='left')
-        """
         
-        dfs_monthly_netsales.append(df_to_date)
+        dfs_monthly_netsales.append(df_monthly_total)
      
     Sales_monthly = pd.concat(dfs_monthly_netsales).reset_index(drop = True)    
     Sales_monthly = Sales_monthly.fillna(0)
     
     Sale_all = Sale_2012_2020_lagged.merge(Sales_monthly, on = ['year', 'Variety_Name', 'abm'], how = 'left')
     
-    if Sale_all.columns.contains('order_Q_2'):
-        print('SALE_ALL')
     # read in the 2021 data
-    Sale_all_2021 = merge_2021_sales_data_impute_daily(df=Sale_all)
+    Sale_all_2021 = merge_2021_sales_data_impute_monthly(df=Sale_all)
     
-    if Sale_all_2021.columns.contains('order_Q_2'):
-        print('SALE_ALL_2021')
     # read in the 2022 data
-    Sale_all_2022 = merge_2022_sales_data_impute_daily(df=Sale_all_2021)
-    
-    if Sale_all_2022.columns.contains('order_Q_2'):
-        print('SALE_ALL_2022')
-    
-    #Sale_all_2022['order_Q'] = Sale_all_2022['order_Q_month_8'].values
-    
-    # read in the 2023 data
-    Sale_all_2023 = merge_2023_D1MS(df=Sale_all_2022)
-    
-    if Sale_all_2023.columns.contains('order_Q_2'):
-        print('SALE_ALL_2023')
-    # read in the 
-    #Sale_all_2023 = merge_2023_tim_pulled_data(df=Sale_all_2022)
+    Sale_all_2022 = merge_2022_SCM_data(df=Sale_all_2021)
     
     # fill nas
-    Sale_all_2023 = Sale_all_2023.fillna(0)
+    Sale_all_2022 = Sale_all_2022.fillna(0)
     
-    return Sale_all_2023
-
+    return Sale_all_2022
 
 def get_RM(df):
     """
@@ -1285,9 +778,8 @@ def get_RM(df):
 
 
 Sale_2012_2020, clean_Sale = read_sales_filepath()
-#Sale_2012_2020_lagged = create_lagged_sales(Sale_2012_2020)
-Sale_2012_2020_monthly = create_monthly_sales(Sale_2012_2020, clean_Sale).reset_index(drop=True)
-Sale_all = create_lagged_sales(Sale_2012_2020_monthly)
+Sale_2012_2020_lagged = create_lagged_sales(Sale_2012_2020)
+Sale_all = create_monthly_sales(Sale_2012_2020_lagged, clean_Sale).reset_index(drop=True)
 
 Sale_all, digies = get_RM(df=Sale_all)
 
@@ -1301,7 +793,7 @@ print("Sale's shape: ", Sale_all.shape)
 
 ###### --------------------- Read Age & Trait Data -------------------- ######
 
-Age_Trait = pd.read_csv('Age_Trait_23_fixed.csv')
+Age_Trait = pd.read_csv('Age_Trait.csv')
 Age_Trait['year'] = Age_Trait['year'].astype(dtype='str',copy=False)
 print("Check the fraction of missing values in Age & Trait data: ", Age_Trait.isna().sum())
 print("Age Trait's shape: ", Age_Trait.shape)
@@ -1324,7 +816,7 @@ def read_weather_filepath():
     dfs_path = []
     
     # read in the data by year
-    for i in range(2012, 2024):
+    for i in range(2012, 2023):
         print("Read ", str(i), " Weather Data")
         dfi_path = BLIZZARD_DIR + 'Blizzard_' + str(i) + '.csv'
         dfi = pd.read_csv(dfi_path)
@@ -1458,8 +950,8 @@ def read_commodity_corn_soybean():
         Commodity_Soybean -- the corn commodity data to date
     """
     # read in soybean and commodity data
-    Corn_Address = DATA_DIR + CM_DIR + 'corn_to_09262022.csv'
-    Soybean_Address = DATA_DIR + CM_DIR + 'soybean_to_09262022.csv'
+    Corn_Address = DATA_DIR + CM_DIR + 'corn_to_10182021.csv'
+    Soybean_Address = DATA_DIR + CM_DIR + 'soybean_to_10182021.csv'
     
     Commodity_Corn = pd.read_csv(Corn_Address)
     Commodity_Soybean = pd.read_csv(Soybean_Address)
@@ -2115,80 +1607,38 @@ def read_2022_CF_data():
     """
     big_cf_file = pd.read_csv(DATA_DIR + BIG_CF_FILE)
     
-    big_cf_file_2021 = big_cf_file[big_cf_file['FORECAST_YEAR'] == 2020].reset_index(drop=True)
-    
     # grab the forecast year 2022 piece
     big_cf_file_2022 = big_cf_file[big_cf_file['FORECAST_YEAR'] == 2021].reset_index(drop=True)
     
     # subset out columns
-    big_cf_file_2021 = big_cf_file_2021[['FORECAST_YEAR', 'TEAM_KEY', 'ACRONYM_NAME',
-                                         'TEAM_Y1_FCST_1', 'TEAM_Y1_FCST_2']]
-    
     big_cf_file_2022 = big_cf_file_2022[['FORECAST_YEAR', 'TEAM_KEY', 'ACRONYM_NAME',
-                                         'TEAM_Y1_FCST_1', 'TEAM_Y1_FCST_2']]
+                                         'TEAM_Y1_FCST_1']]
     
     # rename the columns
-    CF_2021 = big_cf_file_2021.copy().rename(
-            columns={'FORECAST_YEAR': 'year',
-                     'ACRONYM_NAME': 'Variety_Name'})
-    
     CF_2022 = big_cf_file_2022.copy().rename(
             columns={'FORECAST_YEAR': 'year',
                      'ACRONYM_NAME': 'Variety_Name'})
         
-    CF_2021['year'] = 2021    
     CF_2022['year'] = 2022
     
-    CF_21_22 = pd.concat([CF_2021, CF_2022])
-    
-    return CF_21_22
-
-
-def read_2023_CF_data():
-    """Reads in the 2023 y+1 consensus forecast data
-    
-    Keyword arguments:
-        None
-    Returns:
-        CF_2023 -- the y + 1 forecast for 2023
-    """
-    cf_file = pd.read_csv(DATA_DIR + CF_2022_FILE)
-    
-    # grab the forecast year 2022 piece
-    cf_file_2023 = cf_file[cf_file['FORECAST_YEAR'] == 2022].reset_index(drop=True)
-    
-    # subset out columns
-    cf_file_2023 = cf_file_2023[['FORECAST_YEAR', 'TEAM_KEY', 'ACRONYM_NAME',
-                                 'TEAM_Y1_FCST_1', 'TEAM_Y1_FCST_2']]
-    
-    # rename the columns
-    CF_2023 = cf_file_2023.copy().rename(
-            columns={'FORECAST_YEAR': 'year',
-                     'ACRONYM_NAME': 'Variety_Name'})
-        
-    CF_2023['year'] = 2023
-    
-    return CF_2023
+    return CF_2022
 
 
 def read_CY_CF_data():
     """Reads in the current year consensus data
     """
     # read in the file
-    big_cf_file = pd.read_csv(DATA_DIR + CF_2023_FILE)
+    big_cf_file = pd.read_csv(DATA_DIR + BIG_CF_FILE)
     
     # subset relevant columns
     big_cf_file_subset = big_cf_file[['FORECAST_YEAR', 'TEAM_KEY', 'ACRONYM_NAME',
-                                      'TEAM_FCST_QTY_10']]
+                                      'TEAM_FCST_QTY_9', 'TEAM_FCST_QTY_10',
+                                      'TEAM_FCST_QTY_11', 'TEAM_FCST_QTY_12']]
     
     # rename the columns
     cy_CF = big_cf_file_subset.copy().rename(
             columns={'FORECAST_YEAR': 'year',
-                     'ACRONYM_NAME': 'Variety_Name',
-                     'TEAM_FCST_QTY_10': 'lagged_FCST_10'})
-        
-    # drop nan years
-    cy_CF = cy_CF[cy_CF['year'].isna() == False].reset_index(drop=True)
+                     'ACRONYM_NAME': 'Variety_Name'})
     
     return cy_CF
 
@@ -2204,41 +1654,43 @@ def read_concensus_forecasting():
     
     # read in data
     CF_2016_2020_Address = DATA_DIR + 'FY16_20_soybean.csv'
+    CF_2021_Address = DATA_DIR + 'FY22_01_14_21.csv'
     CF_2016_2020 = pd.read_csv(CF_2016_2020_Address)
+    CF_2021 = pd.read_csv(CF_2021_Address, encoding='UTF-8')
     
     # select required columns 
     selected_columns = ['FORECAST_YEAR', 'CROP_DESCR', 'BRAND_GROUP', 'ACRONYM_NAME',
-       'TEAM_KEY', 'TEAM_Y1_FCST_1', 'TEAM_Y1_FCST_2']
+       'TEAM_KEY', 'TEAM_Y1_FCST_1']
     CF_2016_2020 = CF_2016_2020[selected_columns]
+    CF_2021 = CF_2021[selected_columns]
     
+    # concatenate two dataframe 
+    CF_2016_2021 = pd.concat([CF_2016_2020, CF_2021])
     
     # subset crop_descr  = soybean and brand_group = ASGROW
-    CF_2016_2020 = CF_2016_2020[(CF_2016_2020['CROP_DESCR'] == 'SOYBEAN') & 
-                                ((CF_2016_2020['BRAND_GROUP'] == 'ASGROW') | 
-                                 (CF_2016_2020['BRAND_GROUP'] == 'NATIONAL'))]
+    CF_2016_2021 = CF_2016_2021[(CF_2016_2021['CROP_DESCR'] == 'SOYBEAN') & 
+                                ((CF_2016_2021['BRAND_GROUP'] == 'ASGROW') | 
+                                 CF_2016_2021['BRAND_GROUP'] == 'NATIONAL')]
     
     # drop unnecessary columns 
     dropped_cols = ['CROP_DESCR','BRAND_GROUP']
-    CF_2016_2020 = CF_2016_2020.drop(columns = dropped_cols)
-    
-    # rename columns in order to merge
-    CF_2016_2020 = CF_2016_2020.rename(columns = {'FORECAST_YEAR':'year',
-                                                  'ACRONYM_NAME':'Variety_Name'})
+    CF_2016_2021 = CF_2016_2021.drop(columns = dropped_cols)
     
     # read in the big file and get hte 2022 stuff
     CF_2022 = read_2022_CF_data()
-    CF_2023 = read_2023_CF_data()
 
-    CF_2016_2022 = pd.concat([CF_2016_2020, CF_2022])
-    CF_2016_2023 = pd.concat([CF_2016_2022, CF_2023])
+    CF_2016_2022 = pd.concat([CF_2016_2021, CF_2022])
     
+    # rename columns in order to merge
+    CF_2016_2022 = CF_2016_2022.rename(columns = {'FORECAST_YEAR':'year',
+                                                  'ACRONYM_NAME':'Variety_Name'})
     # convert year to strf
-    CF_2016_2023['year'] = CF_2016_2023['year'].astype(int).astype(str)
+    CF_2016_2022['year'] = CF_2016_2022['year'].astype(int).astype(str)
     
     # drop missing value 
-    CF_2016_2023 = CF_2016_2023.dropna(how = 'any')
+    CF_2016_2022 = CF_2016_2022.dropna(how = 'any')
     
-    return CF_2016_2023
+    return CF_2016_2022
 
 
 def impute_CY_CF(df):
@@ -2250,28 +1702,28 @@ def impute_CY_CF(df):
     fitting_df = df[df['year'].isin(FITTING_YEARS)]
     
     # set the ratios 
-    #TEAM_FCST_QTY_9_RATIO = (
-    #        np.sum(fitting_df['TEAM_FCST_QTY_9']) / np.sum(fitting_df['TEAM_Y1_FCST_1']))
+    TEAM_FCST_QTY_9_RATIO = (
+            np.sum(fitting_df['TEAM_FCST_QTY_9']) / np.sum(fitting_df['TEAM_Y1_FCST_1']))
     TEAM_FCST_QTY_10_RATIO = (
             np.sum(fitting_df['TEAM_FCST_QTY_10']) / np.sum(fitting_df['TEAM_Y1_FCST_1']))
-    #TEAM_FCST_QTY_11_RATIO = (
-    #        np.sum(fitting_df['TEAM_FCST_QTY_11']) / np.sum(fitting_df['TEAM_Y1_FCST_1']))
-    #TEAM_FCST_QTY_12_RATIO = (
-    #        np.sum(fitting_df['TEAM_FCST_QTY_12']) / np.sum(fitting_df['TEAM_Y1_FCST_1']))
+    TEAM_FCST_QTY_11_RATIO = (
+            np.sum(fitting_df['TEAM_FCST_QTY_11']) / np.sum(fitting_df['TEAM_Y1_FCST_1']))
+    TEAM_FCST_QTY_12_RATIO = (
+            np.sum(fitting_df['TEAM_FCST_QTY_12']) / np.sum(fitting_df['TEAM_Y1_FCST_1']))
     
     # set the values of those years not in the fitting df using the ratio 
-    #df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_FCST_QTY_9'] = (
-    #        TEAM_FCST_QTY_9_RATIO * df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_Y1_FCST_1'])
+    df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_FCST_QTY_9'] = (
+            TEAM_FCST_QTY_9_RATIO * df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_Y1_FCST_1'])
     df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_FCST_QTY_10'] = (
             TEAM_FCST_QTY_10_RATIO * df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_Y1_FCST_1'])
-    #df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_FCST_QTY_11'] = (
-    #        TEAM_FCST_QTY_11_RATIO * df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_Y1_FCST_1'])
-    #df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_FCST_QTY_12'] = (
-    #        TEAM_FCST_QTY_12_RATIO * df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_Y1_FCST_1'])
+    df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_FCST_QTY_11'] = (
+            TEAM_FCST_QTY_11_RATIO * df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_Y1_FCST_1'])
+    df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_FCST_QTY_12'] = (
+            TEAM_FCST_QTY_12_RATIO * df_impute.loc[df['year'].isin(FITTING_YEARS) != True, 'TEAM_Y1_FCST_1'])
     
     return df_impute
 
-"""
+
 CF_2016_2021 = pd.read_csv('CF_2016_2022.csv')
 
 # drop 2021 data (it's in error, and add +1 to all years)
@@ -2279,70 +1731,26 @@ CF_2016_2021 = CF_2016_2021[CF_2016_2021['year'] != 2021].reset_index(drop=True)
 CF_2016_2021['year'] = CF_2016_2021['year'] + 1
 
 CF_2022 = read_2022_CF_data()
-CF_2023 = read_2023_CF_data()
 CF_2016_2022 = pd.concat([CF_2016_2021, CF_2022])
-CF_2016_2023 = pd.concat([CF_2016_2022, CF_2023])
 
-CF_2016_2023 = read_concensus_forecasting()
+#CF_2016_2022 = read_concensus_forecasting()
 # get the current year data and merge it
 CY_CF = read_CY_CF_data()
-
-"""
-#read in the stuff
-def read_CF_data_y1():
-    
-    CF = pd.read_excel(DATA_DIR + CF_2023_FILE_Y1)
-   
-    
-    selected_columns = ['FORECAST_YEAR', 'CROP_DESCR', 'BRAND_GROUP', 'ACRONYM_NAME',
-       'TEAM_KEY', 'TEAM_Y1_FCST_1', 'TEAM_Y1_FCST_2', 'TEAM_FCST_QTY_10', 'TEAM_FCST_QTY_11',
-       'TEAM_FCST_QTY_12']
-    
-    CF = CF[selected_columns]
-    
-    CF_soy = CF[CF['CROP_DESCR'] == 'SOYBEAN']
-    CF_asgrow = CF_soy[CF_soy['BRAND_GROUP'] == 'ASGROW']
-    
-    # rename columns in order to merge
-    CF_asgrow = CF_asgrow.rename(columns = {'FORECAST_YEAR':'year',
-                                            'ACRONYM_NAME':'Variety_Name',
-                                            'TEAM_FCST_QTY_10': 'lagged_FCST_10',
-                                            'TEAM_FCST_QTY_11': 'lagged_FCST_11',
-                                            'TEAM_FCST_QTY_12': 'lagged_FCST_12'})
-        
-        
-    # drop missing year, hybrid, abm values 
-    CF_asgrow = CF_asgrow[CF_asgrow['year'].isnull() == False].reset_index(drop=True)
-    CF_asgrow = CF_asgrow[CF_asgrow['Variety_Name'].isnull() == False].reset_index(drop=True)
-    CF_asgrow = CF_asgrow[CF_asgrow['TEAM_KEY'].isnull() == False].reset_index(drop=True)
-
-    CF_asgrow = CF_asgrow.fillna(0)
-    
-    #increment the year
-    CF_asgrow['year'] = CF_asgrow['year'] + 1
-    
-    return CF_asgrow
-
-
-CF_2016_2023 = read_CF_data_y1()
-    
+CF_2016_2022 = CF_2016_2022.merge(CY_CF,
+                                  on=['year', 'Variety_Name', 'TEAM_KEY'],
+                                  how='left')
 
 # impute the CY CF forecasts
-#CF_2016_2023 = impute_CY_CF(df=CF_2016_2023)
-"""
-# drop missing year, hybrid, abm values 
-CF_2016_2023 = CF_2016_2023[CF_2016_2023['year'].isnull() == False].reset_index(drop=True)
-CF_2016_2023 = CF_2016_2023[CF_2016_2023['Variety_Name'].isnull() == False].reset_index(drop=True)
-CF_2016_2023 = CF_2016_2023[CF_2016_2023['TEAM_KEY'].isnull() == False].reset_index(drop=True)
+CF_2016_2022 = impute_CY_CF(df=CF_2016_2022)
 
-CF_2016_2023 = CF_2016_2023.fillna(0)
-"""
-
-CF_2016_2023['year'] = CF_2016_2023['year'].astype(int).astype(str)
+CF_2016_2022['year'] = CF_2016_2022['year'].astype(int).astype(str)
     
+# drop missing value 
+CF_2016_2022 = CF_2016_2022.dropna(how='any')
+
 #print("Concensus Forecasting data's Structure: ", CF_2016_2022.info())
 #print("Checking the fraction of missing value: ", CF_2016_2022.isna().sum()/CF_2016_2022.shape[0])
-df_save_path = 'CF_2016_2023.csv'
+df_save_path = 'CF_2016_2022.csv'
 #CF_2016_2022.to_csv(df_save_path, index = False)
 
 def merge_cf_with_abm(df_cf, df_abm_key):
@@ -2362,16 +1770,13 @@ def merge_cf_with_abm(df_cf, df_abm_key):
 
     # select required columns
     CF_abm = CF_abm[['year', 'Variety_Name', 'abm', 'TEAM_Y1_FCST_1',
-                     'TEAM_Y1_FCST_2', 'lagged_FCST_10', 'lagged_FCST_11',
-                     'lagged_FCST_12']]
-                   
+                     'TEAM_FCST_QTY_9', 'TEAM_FCST_QTY_10', 'TEAM_FCST_QTY_11',
+                     'TEAM_FCST_QTY_12']]
+    
     return CF_abm
 
-CF_abm = merge_cf_with_abm(CF_2016_2023, abm_Teamkey)
+CF_abm = merge_cf_with_abm(CF_2016_2022, abm_Teamkey)
 CF_abm['year'] = CF_abm['year'].astype(dtype='str', copy=False)
-
-# drop any values from the CF_abm dataframe that have no entry for Y1_FCST_1 OR Y1_FCST_2
-CF_abm = CF_abm[(CF_abm['TEAM_Y1_FCST_1'] != 0) | (CF_abm['TEAM_Y1_FCST_2'] != 0)].reset_index(drop=True)
 
 ###### --------------------------- Read SRP  ------------------------- ######
 def read_SRP():
@@ -2452,18 +1857,9 @@ def read_SRP():
     SRP_2022 = SRP_2022[['year', 'Variety_Name', 'SRP']]
     
     SRP_2011_2022 = pd.concat([SRP_2011_2021, SRP_2022])
+
     
-    # read in the 2023 file
-    df_2023_path = DATA_DIR + HISTORICAL_SRP + 'asgrow_SRP_23.csv'
-    SRP_2023 = pd.read_csv(df_2023_path)
-    
-    SRP_2023['year'] = '2023'
-    
-    SRP_2023 = SRP_2023[['year', 'Variety_Name', 'SRP']]
-    
-    SRP_2011_2023 = pd.concat([SRP_2011_2022, SRP_2023])
-    
-    return SRP_2011_2023
+    return SRP_2011_2022
 
 read_SRP()
 
@@ -2631,23 +2027,16 @@ def merge_all():
     # print("Step 1: Sale_HP's shape: ", Sale_HP.shape)
     # print("..................")
     
-    # merge sales with consensus data
-    print("Step 1: Merge Sale_HP with CF data......")
-    Sale_HP_CF = Sale_all.merge(CF_abm, how='outer', on=['year', 'Variety_Name', 'abm'])
-    # fill missing CF values that have sales with 0
-    Sale_HP_CF = Sale_HP_CF.fillna(0)
-    print("Step 2: Sale_HP_CF's shape: ", Sale_HP_CF.shape)
-    print("..................")
-    
     ## Merge Sale_HP with age_trait 
     print("Step 2: Merge Sale_HP with Age_Trait......")
-    Sale_HP_trait = Sale_HP_CF.merge(Age_Trait, how = 'left', on = ['year', 'Variety_Name'])
+    Sale_HP_trait = Sale_all.merge(Age_Trait, how = 'left', on = ['year', 'Variety_Name'])
     #print("Step 2: Sale_HP_trait's structure: ", Sale_HP_trait.info())
     print("Step 2: Sale_HP_trait's shape: ", Sale_HP_trait.shape)
     print("..................")
     
     # impute lagged sales for age one products
-    #Sale_HP_trait = impute_age_one_lagged(df=Sale_HP_trait)
+    Sale_HP_trait = impute_age_one_lagged(df=Sale_HP_trait)
+    
     
     ## Merge Sale_HP_trait with weather_flattened
     print("Step 3: Merge Sale_HP_trait with Weather_flattened......")
@@ -2681,17 +2070,13 @@ def merge_all():
     Performance_adv1 = Performance_adv1.drop(columns=['trait'])
     Performance_adv1['year'] = Performance_adv1['year'].astype(str)
     
-    Sale_HP_trait_weather_CM_Performance_no_imp = Sale_HP_trait_weather_CM.merge(Performance_adv1,
+    Sale_HP_trait_weather_CM_Performance = Sale_HP_trait_weather_CM.merge(Performance_adv1,
                                         on=['year', 'abm', 'Variety_Name'],
                                         how='left')
     # impute the missing value 
-    if IMPUTE_H2H == True:
-        Sale_HP_trait_weather_CM_Performance = impute_h2h_data(Sale_HP_trait_weather_CM_Performance_no_imp, 
-                                                               product_abm_level, trait_abm_year_level,
-                                                               abm_year_level, year_level)
-    else: 
-        Sale_HP_trait_weather_CM_Performance = Sale_HP_trait_weather_CM_Performance_no_imp[
-                Sale_HP_trait_weather_CM_Performance_no_imp['yield'].isna()==False].reset_index(drop=True)
+    Sale_HP_trait_weather_CM_Performance = impute_h2h_data(Sale_HP_trait_weather_CM_Performance, 
+                                                            product_abm_level, trait_abm_year_level,
+                                                            abm_year_level, year_level)
     
     # replace any blank trait values with "Conventional"
     Sale_HP_trait_weather_CM_Performance['trait'] = Sale_HP_trait_weather_CM_Performance['trait'].fillna('Conventional')
@@ -2702,13 +2087,17 @@ def merge_all():
     Sale_HP_trait_weather_CM_Performance.to_csv(df_save_path, index = False)
     
     ## Merge Sale_HP_trait_weather_CM_Performance with Concensus Forecasting
-    #print("Step 6: Merge Sale_HP_trait_weather_CM with CF......")
-    #Sale_HP_trait_weather_CM_Performance_CF = Sale_HP_trait_weather_CM_Performance.merge(CF_abm, how = 'left', on = ['year','Variety_Name','abm'])
-    #print("Step 6: Sale_HP_trait_weather_CM's shape: ", Sale_HP_trait_weather_CM_Performance_CF.shape)
-    #print("..................")
-        
+    print("Step 6: Merge Sale_HP_trait_weather_CM with CF......")
+    Sale_HP_trait_weather_CM_Performance_CF = Sale_HP_trait_weather_CM_Performance.merge(CF_abm, how = 'left', on = ['year','Variety_Name','abm'])
+    print("Step 6: Sale_HP_trait_weather_CM's shape: ", Sale_HP_trait_weather_CM_Performance_CF.shape)
+    print("..................")
+    
+    print("Checking the portion of missing value in the combined dataset: ")
+    Sale_HP_trait_weather_CM_Performance_CF.isna().sum()/Sale_HP_trait_weather_CM_Performance_CF.shape[0]
+    Sale_HP_trait_weather_CM_Performance_CF['TEAM_Y1_FCST_1'] = Sale_HP_trait_weather_CM_Performance_CF['TEAM_Y1_FCST_1'].fillna(0)
+    
     print("Step 7: Merge Sale_HP_trait_weather_CM_CF with SRP......")
-    Sale_HP_trait_weather_CM_Performance_CF_SRP = Sale_HP_trait_weather_CM_Performance.merge(SRP_2011_2019, how = 'left', on = ['year', 'Variety_Name'])
+    Sale_HP_trait_weather_CM_Performance_CF_SRP = Sale_HP_trait_weather_CM_Performance_CF.merge(SRP_2011_2019, how = 'left', on = ['year', 'Variety_Name'])
     # impute the missing value
     Sale_HP_trait_weather_CM_Performance_CF_SRP = impute_SRP(Sale_HP_trait_weather_CM_Performance_CF_SRP)
     print("Step 7: Sale_HP_trait_weather_CM_SRP's shape: ", Sale_HP_trait_weather_CM_Performance_CF_SRP.shape)
@@ -2720,9 +2109,9 @@ def merge_all():
     df_save_path = 'Sale_HP_trait_weather_CM_Performance_CF_SRP.csv'
     Sale_HP_trait_weather_CM_Performance_CF_SRP.to_csv(df_save_path, index = False)
 
-    return Sale_HP_trait_weather_CM_Performance_CF_SRP, Sale_HP_trait_weather, Sale_HP_trait_weather_CM_Performance_no_imp
+    return Sale_HP_trait_weather_CM_Performance_CF_SRP, Sale_HP_trait_weather
 
-Sale_HP_trait_weather_CM_Performance_CF_SRP, Sale_HP_trait_weather, Sale_HP_trait_weather_CM_Performance_no_imp = merge_all()
+Sale_HP_trait_weather_CM_Performance_CF_SRP, Sale_HP_trait_weather = merge_all()
 
 
 def usda_acre_data(df, crop):
@@ -2922,25 +2311,17 @@ print("Step 8: Encoding trait")
 Final_df = Sale_HP_trait_weather_CM_Performance_CF_SRP.merge(trait_map, how = 'left', on = ['trait']) 
 
 # add county yield data
-#sales_w_county_yield = usda_yield_data(df=Final_df)
+sales_w_county_yield = usda_yield_data(df=Final_df)
 
 # add the USDA acreage data
-#sales_w_corn_acreage = usda_acre_data(df=sales_w_county_yield, crop='corn')
-#sales_w_soybean_acreage = usda_acre_data(df=sales_w_corn_acreage, crop='soybean')
+sales_w_corn_acreage = usda_acre_data(df=sales_w_county_yield, crop='corn')
+sales_w_soybean_acreage = usda_acre_data(df=sales_w_corn_acreage, crop='soybean')
 
-#sales_w_soybean_acreage = sales_w_soybean_acreage.replace(-np.inf, 0)
-#sales_w_soybean_acreage = sales_w_soybean_acreage.replace(np.inf, 0)
-#sales_w_soybean_acreage = sales_w_soybean_acreage.fillna(0)
+sales_w_soybean_acreage = sales_w_soybean_acreage.replace(-np.inf, 0)
+sales_w_soybean_acreage = sales_w_soybean_acreage.replace(np.inf, 0)
+sales_w_soybean_acreage = sales_w_soybean_acreage.fillna(0)
 
-#Final_df_acreage = sales_w_soybean_acreage.drop(columns = ['trait'])
-
-Final_df_acreage = Final_df.replace(-np.inf, 0)
-Final_df_acreage = Final_df_acreage.replace(np.inf, 0)
-Final_df_acreage = Final_df_acreage.fillna(0)
-
-# fill age 0 products with age 1
-Final_df_acreage['age'] = Final_df_acreage['age'].replace(0, 1)
-
+Final_df_acreage = sales_w_soybean_acreage.drop(columns = ['trait'])
 # drop any UNKNOWNs
 Final_df_acreage = Final_df_acreage.rename(columns={'Variety_Name': 'hybrid'})
 Final_df_acreage = Final_df_acreage[
@@ -2948,64 +2329,16 @@ Final_df_acreage = Final_df_acreage[
 
 # rename and drop monthly columns
 Final_df_acreage = Final_df_acreage.rename(columns={'order_Q_month_8': 'order_Q'})
-"""Final_df_acreage = Final_df_acreage.drop(
+Final_df_acreage = Final_df_acreage.drop(
         columns=['order_Q_month_1', 'order_Q_month_2', 'order_Q_month_3',
                  'order_Q_month_4', 'order_Q_month_5', 'order_Q_month_6',
                  'order_Q_month_7', 'order_Q_month_9', 'order_Q_month_10',
                  'order_Q_month_11', 'order_Q_month_12'])
-"""
-if IMPUTE_H2H == True:
-    df_save_path = 'y1_master_df_2023_jan15_laggedCY_newCF.csv'
-else:
-    df_save_path = 'y1_master_df_2023_jan15_no_imp.csv'
+
+df_save_path = 'r_r_yunxuan_2022_feb23.csv'
 Final_df_acreage.to_csv(df_save_path, index = False)
+Final_df_acreage.isna().sum()
 
-Final_df_acreage_hybrids_abm_2023 = Final_df_acreage[['hybrid', 'abm', 'year', 'SRP']].copy()
-Final_df_acreage_hybrids_abm_2023 = Final_df_acreage[
-        Final_df_acreage['year'] == '2023'].reset_index(drop=True)
+Final_df_acreage.isna().sum().sum()
 
-
-# check net sales and forecasts by year
-for year in Final_df_acreage['year'].unique():
-    single_year = Final_df_acreage[Final_df_acreage['year'] == year]
-    
-    single_year_nets_Q = single_year['nets_Q'].sum()
-    single_year_fcst_1 = single_year['TEAM_Y1_FCST_1'].sum()
-    single_year_fcst_2 = single_year['TEAM_Y1_FCST_2'].sum()
-    
-    single_CF_year = CF_abm[CF_abm['year'] == year]
-    
-    single_year_raw_fcst_1 = single_CF_year['TEAM_Y1_FCST_1'].sum()
-    single_year_raw_fcst_2 = single_CF_year['TEAM_Y1_FCST_2'].sum()
-    
-    
-    print(year)
-    print('nets_Q:' + str(single_year_nets_Q))
-    print('')
-    print('FCST_1:' + str(single_year_fcst_1))
-    print('raw FCST_1:' + str(single_year_raw_fcst_1))
-    print('')
-    print('FCST_2:' + str(single_year_fcst_2))
-    print('raw FCST_2:' + str(single_year_raw_fcst_2))
-    print('')
-    
-"""
-df_save_path_no_fcst = 'y1_master_data_no_fc.csv'
-Final_df_acreage_no_FCST = Final_df_acreage[
-        (Final_df_acreage['TEAM_Y1_FCST_1'] != 0) & (Final_df_acreage['TEAM_FCST_QTY_10'] != 0)].reset_index(
-        drop=True)
-
-Final_df_acreage_no_FCST.to_csv(df_save_path_no_fcst, index=False)
-
-Final_df_acreage_hybrids_abm_2023[
-        ['hybrid', 'SRP']].groupby(by=['hybrid'], as_index=False).mean().to_csv('SRP_2023s_tim.csv', index=False)
-
-seventeen_on = Final_df_acreage[
-        Final_df_acreage['year'].isin(['2017', '2018', '2019', '2020', '2021', '2022', '2023'])]
-seventeen_on_subset = seventeen_on[['year', 'orders_to_date', 'TEAM_FCST_QTY_10']]
-
-seventeen_on_grouped = seventeen_on_subset.groupby(by=['year'],as_index = False).sum()
-
-seventeen_on_grouped['ratio'] = (
-        seventeen_on_grouped['orders_to_date'] / seventeen_on_grouped['TEAM_FCST_QTY_10'])
-"""
+Final_df_acreage

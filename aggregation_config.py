@@ -16,12 +16,12 @@ CF_2023_FILE = 'FY23_Soy_101922.csv'
 
 CF_2023_FILE_Y1 = 'FY23_Soy_011923.xlsx'
 
-BLIZZARD_DIR = '../../NA-soy-pricing/dataframe_construction_r_r/blizzard/county_data/'
+BLIZZARD_DIR = '../NA-soy-pricing/dataframe_construction_r_r/blizzard/county_data/'
 
 CM_DIR = 'CM_prep/'
 
 # the data directory
-DATA_DIR = '../../NA-soy-pricing/data/'
+DATA_DIR = '../NA-soy-pricing/data/'
 
 H2H_DIR = 'H2H_yield_data/'
 
